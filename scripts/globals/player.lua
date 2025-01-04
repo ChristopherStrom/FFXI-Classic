@@ -145,6 +145,7 @@ xi.player.charCreate = function(player)
     player:setCharVar('TutorialProgress', 1)            -- Has not started tutorial
     player:setCharVar('EinherjarIntro', 1)              -- Has not seen Einherjar intro
     player:setNewPlayer(true)                           -- apply new player flag
+    player:setCharVar('PhynixLinkperal', 0)		-- Player does not have linkpearl
 end
 
 -- called by core after a player logs into the server or zones
@@ -170,6 +171,14 @@ xi.player.onGameIn = function(player, firstLogin, zoning)
 
         player:setLocalVar('gameLogin', 0)
     end
+ 
+    -- Give player linkpearl if doesnt have
+    if 
+	player:getLocalVar('PhynixLinkperal') == 0 
+    then 
+	player:addLinkpearl('Phynix', false)
+	player:setLocalVar('PhynixLinkperal', 1)
+    end   
 
     -- Abyssea starting quest should be flagged when expansion is active
     if
