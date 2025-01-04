@@ -20,7 +20,7 @@ xi.mobMod =
     HP_HEAL_CHANCE         = 9,  -- can cast cures below this HP %
     SUBLINK                = 10, -- sub link group
     LINK_RADIUS            = 11, -- link radius
-    DRAW_IN                = 12, -- 1 - player draw in, 2 - alliance draw in -- only add as a spawn mod!
+    -- UNUSED = 12,
     SEVERE_SPELL_CHANCE    = 13, -- % chance to use a severe spell like death or impact
     SKILL_LIST             = 14, -- uses given mob skill list
     MUG_GIL                = 15, -- amount gil carried for mugging
@@ -89,4 +89,6 @@ xi.mobMod =
     STANDBACK_RANGE        = 78, -- Applies a specific standback range for the mob
     CANNOT_GUARD           = 79, -- Check if the mob does not guard (despite being a MNK or PUP mob)
     SKIP_ALLEGIANCE_CHECK  = 80, -- Skip the allegiance check for valid target (allows for example a mob to cast a TARGET_ENEMY spell on itself)
+    ABILITY_RESPONSE       = 81, -- Mob can respond to player ability use with onPlayerAbilityUse()
+    RUN_SPEED_MULT         = 82, -- Multiplier for the speed of a mob while running (generally when the target is out of range) 100 = 1.00x
 }

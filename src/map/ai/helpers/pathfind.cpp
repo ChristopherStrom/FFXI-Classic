@@ -26,6 +26,8 @@
 #include "entities/baseentity.h"
 #include "entities/mobentity.h"
 #include "lua/luautils.h"
+#include "mob_modifier.h"
+#include "status_effect_container.h"
 #include "zone.h"
 
 #include <cfloat>
@@ -359,17 +361,23 @@ void CPathFind::FollowPath(time_point tick)
 void CPathFind::StepTo(const position_t& pos, bool run)
 {
     TracyZoneScoped;
-    float speed = GetRealSpeed();
-
-    int8 mode = 2;
-
-    if (!run)
+    bool speedChange = false;
+    if (auto* PBattleEntity = dynamic_cast<CBattleEntity*>(m_POwner))
     {
-        mode = 1;
-        speed /= 2;
+        speedChange = PBattleEntity->speed != PBattleEntity->UpdateSpeed(run);
     }
 
-    float stepDistance = (speed / 10) / 2;
+    float speed = m_POwner->speed;
+
+    if (const auto* PMobEntity = dynamic_cast<CMobEntity*>(m_POwner))
+    {
+        if (PMobEntity->speed == 0 && (m_roamFlags & ROAMFLAG_WORM))
+        {
+            speed = 20;
+        }
+    }
+
+    float stepDistance = speed / (run ? 50 : 40);
     float distanceTo   = distance(m_POwner->loc.p, pos);
     float diff_y       = pos.y - m_POwner->loc.p.y;
 
@@ -432,12 +440,9 @@ void CPathFind::StepTo(const position_t& pos, bool run)
         }
     }
 
-    m_POwner->loc.p.moving += (uint16)((0x36 * ((float)m_POwner->speed / 0x28)) - (0x14 * (mode - 1)));
+    m_POwner->loc.p.moving += speedChange ? 0x28 : 0x35;
 
-    if (m_POwner->loc.p.moving > 0x2fff)
-    {
-        m_POwner->loc.p.moving = 0;
-    }
+    m_POwner->loc.p.moving %= 0x2000;
 
     m_POwner->updatemask |= UPDATE_POS;
 }
@@ -559,38 +564,6 @@ void CPathFind::LookAt(const position_t& point)
 bool CPathFind::OnPoint() const
 {
     return m_onPoint;
-}
-
-float CPathFind::GetRealSpeed()
-{
-    uint8 realSpeed = m_POwner->speed;
-
-    // 'GetSpeed()' factors in movement bonuses such as map confs and modifiers.
-    if (m_POwner->objtype != TYPE_NPC)
-    {
-        realSpeed = ((CBattleEntity*)m_POwner)->GetSpeed();
-    }
-
-    // Lets not check mob things on non mobs
-    if (m_POwner->objtype == TYPE_MOB)
-    {
-        if (realSpeed == 0 && (m_roamFlags & ROAMFLAG_WORM))
-        {
-            realSpeed = 20;
-        }
-        else if (m_POwner->animation == ANIMATION_ATTACK)
-        {
-            auto speedMod = settings::get<int8>("map.MOB_SPEED_MOD");
-            if (speedMod < -90)
-            {
-                speedMod = -90;
-            }
-
-            realSpeed *= 1.0f + speedMod / 100.0f;
-        }
-    }
-
-    return realSpeed;
 }
 
 bool CPathFind::IsFollowingPath()

@@ -70,6 +70,7 @@
 #include "entities/baseentity.h"
 #include "entities/charentity.h"
 #include "entities/mobentity.h"
+#include "fishingcontest.h"
 #include "instance.h"
 #include "items/item_puppet.h"
 #include "map.h"
@@ -118,14 +119,14 @@ void ReportErrorToPlayer(CBaseEntity* PEntity, std::string const& message = "") 
                 {
                     auto        channel = MESSAGE_NS_SHOUT;
                     std::string breaker = "================";
-                    PChar->pushPacket(new CChatMessagePacket(PChar, channel, breaker.c_str()));
-                    PChar->pushPacket(new CChatMessagePacket(PChar, channel, "!!! Lua error !!!"));
+                    PChar->pushPacket<CChatMessagePacket>(PChar, channel, breaker.c_str());
+                    PChar->pushPacket<CChatMessagePacket>(PChar, channel, "!!! Lua error !!!");
                     for (auto const& part : split(message, "\n"))
                     {
                         auto str = replace(part, "\t", "    ");
-                        PChar->pushPacket(new CChatMessagePacket(PChar, channel, str.c_str()));
+                        PChar->pushPacket<CChatMessagePacket>(PChar, channel, str.c_str());
                     }
-                    PChar->pushPacket(new CChatMessagePacket(PChar, channel, breaker.c_str()));
+                    PChar->pushPacket<CChatMessagePacket>(PChar, channel, breaker.c_str());
                 }
             }
         }
@@ -181,6 +182,7 @@ namespace luautils
         lua.set_function("PlayerHasValidSession", &luautils::PlayerHasValidSession);
         lua.set_function("GetPlayerIDByName", &luautils::GetPlayerIDByName);
         lua.set_function("SendToJailOffline", &luautils::SendToJailOffline);
+        lua.set_function("DrawIn", &luautils::DrawIn);
         lua.set_function("GetSystemTime", &luautils::GetSystemTime);
         lua.set_function("JstMidnight", &luautils::JstMidnight);
         lua.set_function("JstWeekday", &luautils::JstWeekday);
@@ -237,6 +239,13 @@ namespace luautils
         lua.set_function("GetSynergyRecipeByID", &luautils::GetSynergyRecipeByID);
         lua.set_function("GetSynergyRecipeByTrade", &luautils::GetSynergyRecipeByTrade);
 
+        // Fishing Contest Functions
+        lua.set_function("GetFishingContest", &luautils::GetFishingContest);
+        lua.set_function("InitNewFishingContest", &luautils::InitNewFishingContest);
+        lua.set_function("SetContestParameters", &luautils::SetContestParameters);
+        lua.set_function("ProgressFishingContest", &luautils::ProgressFishingContest);
+        lua.set_function("InitializeFishingContestSystem", &luautils::InitializeFishingContestSystem);
+
         // This binding specifically exists to forcefully crash the server.
         // clang-format off
         lua.set_function("ForceCrash", []() { crash(); });
@@ -272,6 +281,7 @@ namespace luautils
         // Load globals
         // Truly global files first
         lua.safe_script_file("./scripts/globals/common.lua");
+        lua.safe_script_file("./scripts/globals/utils.lua");
 
         // Load global enums
         for (auto const& entry : sorted_directory_iterator<std::filesystem::directory_iterator>("./scripts/enum"))
@@ -403,22 +413,16 @@ namespace luautils
 
     void ReloadFilewatchList()
     {
-        std::set<std::string> filenames; // For de-duping
-
-        std::filesystem::path path;
-        while (filewatcher->modifiedQueue.try_dequeue(path))
+        for (const auto& [filename, action] : filewatcher->getChangedLuaFiles())
         {
-            if (path.extension() == ".lua")
+            const auto pathStr = filename.generic_string();
+            if (action == Filewatcher::Action::Add || action == Filewatcher::Action::Modified)
             {
-                std::string filename = path.relative_path().generic_string();
-                filenames.insert(filename);
+                ShowInfo("[FileWatcher] %s", pathStr.c_str());
+                CacheLuaObjectFromFile(pathStr, true);
             }
-        }
 
-        for (auto const& filename : filenames)
-        {
-            ShowInfo("[FileWatcher] %s", filename);
-            CacheLuaObjectFromFile(filename, true);
+            // TODO: Handle moved and deleted files
         }
     }
 
@@ -928,63 +932,45 @@ namespace luautils
             else
             {
                 ShowError(fmt::format("GetFirstID({}) in zone {}: Returning nil", name, zoneName));
-
                 return std::nullopt;
             }
         });
 
         std::unordered_map<std::string, sol::table> idLuaTables;
 
-        lua.set_function("GetTableOfIDs", [&](std::string const& name, std::optional<int> optRange, std::optional<int> optOffset) -> sol::table
+        lua.set_function("GetTableOfIDs", [&](std::string const& name) -> sol::table
         {
-            // Is it already built and cached?
+            // Is it already built and cached: return it
             if (idLuaTables.find(name) != idLuaTables.end())
             {
                 return idLuaTables[name];
             }
 
-            sol::table table = lua.create_table();
-
-            // Match first, +n following entries [start, start + n)
-            if (optRange)
+            // If we have no entries, bail out and return nil
+            if (lookup.find(name) == lookup.end())
             {
-                int range = *optRange;
-
-                // If we have no entries, bail out and return nil
-                if (lookup.find(name) == lookup.end())
-                {
-                    ShowError(fmt::format("GetTableOfIDs({}) in zone {}: Returning nil", name, zoneName));
-                    return sol::lua_nil;
-                }
-
-                auto entriesVec = lookup[name];
-
-                if (entriesVec.empty())
-                {
-                    ShowError(fmt::format("GetTableOfIDs({}) in zone {}: Returning empty table", name, zoneName));
-                    return table;
-                }
-
-                uint32 offset  = optOffset.value_or(0);
-                uint32 startId = entriesVec.front() + offset;
-                uint32 endId   = startId + range;
-
-                // TODO: Set this up to be able to iterate negatively too
-                for (std::size_t idx = startId; idx < endId; ++idx)
-                {
-                    table.add(idx);
-                }
+                ShowError(fmt::format("GetTableOfIDs({}) in zone {}: Returning nil", name, zoneName));
+                return sol::lua_nil;
             }
-            else // Look up all that match name
+
+            // Otherwise, let's start building it and then cache it
+            auto table = lua.create_table();
+
+            auto entriesVec = lookup[name];
+            if (entriesVec.empty())
             {
-                for (auto const& [lookupName, lookupVec] : lookup)
+                ShowError(fmt::format("GetTableOfIDs({}) in zone {}: Returning empty table", name, zoneName));
+                return table;
+            }
+
+            // Look up all that match name
+            for (auto const& [lookupName, lookupVec] : lookup)
+            {
+                if (name == lookupName)
                 {
-                    if (name == lookupName)
+                    for (auto const& entryId : lookupVec)
                     {
-                        for (auto const& entryId : lookupVec)
-                        {
-                            table.add(entryId);
-                        }
+                        table.add(entryId);
                     }
                 }
             }
@@ -1784,6 +1770,20 @@ namespace luautils
         _sql->Query("UPDATE chars SET pos_x=%f, pos_y=%f, pos_z=%f, pos_rot=%u, pos_zone=%d, moghouse=0 WHERE charid=%u", posX, posY, posZ, rot, ZONEID::ZONE_MORDION_GAOL, playerId);
     }
 
+    void DrawIn(CLuaBaseEntity* PLuaBaseEntity, sol::table const& table, float offset, float degrees)
+    {
+        TracyZoneScoped;
+        if (auto* PBattleEntity = dynamic_cast<CBattleEntity*>(PLuaBaseEntity->GetBaseEntity()))
+        {
+            position_t pos;
+            pos.x        = table.get<float>("x");
+            pos.y        = table.get<float>("y");
+            pos.z        = table.get<float>("z");
+            pos.rotation = table.get<uint8>("rot");
+            battleutils::DrawIn(PBattleEntity, pos, offset, degrees);
+        }
+    }
+
     /************************************************************************
      *                                                                       *
      *  Load the value of the TextID variable of the specified zone          *
@@ -1826,7 +1826,7 @@ namespace luautils
         return true;
     }
 
-    void OnZoneInitialise(uint16 ZoneID)
+    void OnZoneInitialize(uint16 ZoneID)
     {
         TracyZoneScoped;
 
@@ -1841,7 +1841,7 @@ namespace luautils
         auto name     = PZone->getName();
         auto filename = fmt::format("./scripts/zones/{}/Zone.lua", name);
 
-        ShowTraceFmt("luautils::OnZoneInitialise: {}", name);
+        ShowTraceFmt("luautils::OnZoneInitialize: {}", name);
 
         CacheLuaObjectFromFile(filename);
 
@@ -2254,7 +2254,7 @@ namespace luautils
         if (PChar->currentEvent->scriptFile.find("/bcnms/") > 0 && PChar->health.hp <= 0)
         { // for some reason the event doesnt enforce death afterwards
             PChar->animation = ANIMATION_DEATH;
-            PChar->pushPacket(new CRaiseTractorMenuPacket(PChar, TYPE_HOMEPOINT));
+            PChar->pushPacket<CRaiseTractorMenuPacket>(PChar, TYPE_HOMEPOINT);
             PChar->updatemask |= UPDATE_HP;
         }
 
@@ -3084,7 +3084,7 @@ namespace luautils
         }
     }
 
-    int32 OnBattlefieldHandlerInitialise(CZone* PZone)
+    int32 OnBattlefieldHandlerInitialize(CZone* PZone)
     {
         TracyZoneScoped;
 
@@ -3096,26 +3096,26 @@ namespace luautils
         int32 MaxAreas = 3;
 
         // TODO: This is loaded globally, fix this
-        auto onBattlefieldHandlerInitialise = lua["onBattlefieldHandlerInitialise"];
-        if (!onBattlefieldHandlerInitialise.valid())
+        auto onBattlefieldHandlerInitialize = lua["onBattlefieldHandlerInitialize"];
+        if (!onBattlefieldHandlerInitialize.valid())
         {
             return MaxAreas;
         }
 
         CLuaZone LuaZone(PZone);
 
-        auto result = onBattlefieldHandlerInitialise(CLuaZone(PZone));
+        auto result = onBattlefieldHandlerInitialize(CLuaZone(PZone));
         if (!result.valid())
         {
             sol::error err = result;
-            ShowError("luautils::onBattlefieldHandlerInitialise: %s", err.what());
+            ShowError("luautils::onBattlefieldHandlerInitialize: %s", err.what());
             return MaxAreas;
         }
 
         return result.get_type(0) == sol::type::number ? result.get<int32>(0) : MaxAreas;
     }
 
-    void OnBattlefieldInitialise(CBattlefield* PBattlefield)
+    void OnBattlefieldInitialize(CBattlefield* PBattlefield)
     {
         TracyZoneScoped;
 
@@ -3124,7 +3124,7 @@ namespace luautils
             return;
         }
 
-        invokeBattlefieldEvent(PBattlefield->GetID(), "onBattlefieldInitialise", CLuaBattlefield(PBattlefield));
+        invokeBattlefieldEvent(PBattlefield->GetID(), "onBattlefieldInitialize", CLuaBattlefield(PBattlefield));
     }
 
     void OnBattlefieldTick(CBattlefield* PBattlefield)
@@ -3264,37 +3264,6 @@ namespace luautils
         {
             sol::error err = result;
             ShowError("luautils::onMobUnfollow: %s", err.what());
-        }
-    }
-
-    void OnMobDrawIn(CBaseEntity* PMob, CBaseEntity* PTarget)
-    {
-        TracyZoneScoped;
-
-        if (PTarget == nullptr || PMob == nullptr)
-        {
-            return;
-        }
-
-        auto filename = fmt::format("./scripts/zones/{}/mobs/{}.lua", PMob->loc.zone->getName(), PMob->getName());
-
-        if (PTarget->objtype == TYPE_PC)
-        {
-            ((CCharEntity*)PTarget)->eventPreparation->targetEntity = PMob;
-            ((CCharEntity*)PTarget)->eventPreparation->scriptFile   = filename;
-        }
-
-        sol::function onMobDrawIn = getEntityCachedFunction(PMob, "onMobDrawIn");
-        if (!onMobDrawIn.valid())
-        {
-            return;
-        }
-
-        auto result = onMobDrawIn(CLuaBaseEntity(PMob), CLuaBaseEntity(PTarget));
-        if (!result.valid())
-        {
-            sol::error err = result;
-            ShowError("luautils::onMobDrawIn: %s", err.what());
         }
     }
 
@@ -3545,6 +3514,29 @@ namespace luautils
         {
             sol::error err = result;
             ShowError("luautils::onMobDespawn: %s", err.what());
+        }
+    }
+
+    void OnPlayerAbilityUse(CBaseEntity* PMob, CBaseEntity* PPlayer, CAbility* PAbility)
+    {
+        TracyZoneScoped;
+
+        if (PMob == nullptr || PPlayer == nullptr || PAbility == nullptr)
+        {
+            return;
+        }
+
+        auto onPlayerAbilityUse = getEntityCachedFunction(PMob, "onPlayerAbilityUse");
+        if (!onPlayerAbilityUse.valid())
+        {
+            return;
+        }
+
+        auto result = onPlayerAbilityUse(CLuaBaseEntity(PMob), CLuaBaseEntity(PPlayer), CLuaAbility(PAbility));
+        if (!result.valid())
+        {
+            sol::error err = result;
+            ShowError("luautils::onPlayerAbilityUse: %s", err.what());
         }
     }
 
@@ -4229,13 +4221,16 @@ namespace luautils
             return 0;
         }
 
-        sol::function onSteal = getEntityCachedFunction(PMob, "onSteal");
-        if (!onSteal.valid())
-        {
-            return 0;
-        }
+        auto zone     = PChar->loc.zone->getName();
+        auto name     = PMob->getName();
+        auto filename = fmt::format("./scripts/zones/{}/mobs/{}.lua", zone, name);
 
-        auto result = onSteal(CLuaBaseEntity(PChar), CLuaBaseEntity(PMob), CLuaAbility(PAbility), CLuaAction(action));
+        ShowTrace("luautils::OnSteal: {} ({}) -> {}", PChar->getName(), zone, name);
+
+        auto onStealFramework = lua["InteractionGlobal"]["onSteal"];
+        auto onSteal          = GetCacheEntryFromFilename(filename)["onSteal"];
+
+        auto result = onStealFramework(CLuaBaseEntity(PChar), CLuaBaseEntity(PMob), CLuaAbility(PAbility), CLuaAction(action), onSteal);
         if (!result.valid())
         {
             sol::error err = result;
@@ -5456,7 +5451,7 @@ namespace luautils
         customMenuContext.erase(PChar->id);
     }
 
-    SendToDBoxReturnCode SendItemToDeliveryBox(std::string const& playerName, uint16 itemId, uint32 quantity, std::string senderText)
+    SendToDBoxReturnCode SendItemToDeliveryBox(const std::string& playerName, uint16 itemId, uint32 quantity, const std::string& senderText)
     {
         uint32 playerID = GetPlayerIDByName(playerName);
         if (playerID == 0)
@@ -5538,7 +5533,7 @@ namespace luautils
         {
             while (rset->next())
             {
-                id = rset->getUInt("itemid");
+                id = rset->get<uint16>("itemid");
             }
         }
         else if (rset && rowCount > 1)
@@ -5699,6 +5694,55 @@ namespace luautils
         PEntity->updatemask |= UPDATE_ALL_CHAR;
 
         return CLuaBaseEntity(PEntity);
+    }
+
+    // Fishing Contest utilities
+    auto GetFishingContest() -> sol::table
+    {
+        sol::table table = lua.create_table();
+
+        table["status"]     = fishingcontest::GetContestStatus();
+        table["criteria"]   = fishingcontest::GetContestCriteria();
+        table["measure"]    = fishingcontest::GetContestMeasure();
+        table["fishid"]     = fishingcontest::GetContestFish();
+        table["starttime"]  = fishingcontest::GetContestStartTime();
+        table["changetime"] = fishingcontest::GetContestChangeTime();
+
+        return table;
+    }
+
+    void InitNewFishingContest()
+    {
+        // This function will destroy the current contest and start a new one
+        fishingcontest::InitNewContest();
+    }
+
+    void SetContestParameters(uint16 fishId, uint8 measure, uint8 criteria)
+    {
+        // Note: Validation of fish item id should be done in lua, since the fish table is also in lua
+        fishingcontest::SetContestFish(fishId);
+        fishingcontest::SetContestMeasure(static_cast<FISHING_CONTEST_MEASURE>(measure));
+        fishingcontest::SetContestCriteria(static_cast<FISHING_CONTEST_CRITERIA>(criteria));
+    }
+
+    void ProgressFishingContest()
+    {
+        // This function will get called every tick when automatic progression is enabled
+        fishingcontest::ProgressContest();
+    }
+
+    void InitializeFishingContestSystem()
+    {
+        // IMPORTANT: This should only be called on the Zone Init in Selbina
+        // Do not run this from multiple server instances
+        if (zoneutils::IsZoneOnThisProcess(ZONEID::ZONE_SELBINA))
+        {
+            fishingcontest::InitializeFishingContestSystem();
+        }
+        else
+        {
+            ShowWarning("Attempted to initialize fishing contest from outside of Selbina.");
+        }
     }
 
     auto GetSynergyRecipeByID(uint32 id) -> sol::table

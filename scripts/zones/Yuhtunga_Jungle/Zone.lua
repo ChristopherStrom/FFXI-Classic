@@ -16,6 +16,8 @@ zoneObject.onInitialize = function(zone)
 
     xi.bmt.updatePeddlestox(xi.zone.YUHTUNGA_JUNGLE, ID.npc.PEDDLESTOX)
 
+    GetMobByID(ID.mob.TURTLERIDER):setRespawnTime(math.random(900, 10800))
+
     GetMobByID(ID.mob.PYUU_THE_SPATEMAKER):setRespawnTime(math.random(5400, 7200))
 end
 
@@ -60,6 +62,22 @@ zoneObject.onEventUpdate = function(player, csid, option, npc)
 end
 
 zoneObject.onEventFinish = function(player, csid, option, npc)
+end
+
+zoneObject.onZoneWeatherChange = function(weather)
+    -- NM Bayawak only spawns during fire weather
+    local bayawak = GetMobByID(ID.mob.BAYAWAK)
+
+    if bayawak and (weather == xi.weather.HOT_SPELL or weather == xi.weather.HEAT_WAVE) then
+        DisallowRespawn(bayawak:getID(), false)
+
+        -- Spawn if respawn is up
+        if os.time() > bayawak:getLocalVar("respawn") then
+            SpawnMob(bayawak:getID())
+        end
+    elseif bayawak then
+        DisallowRespawn(bayawak:getID(), true)
+    end
 end
 
 return zoneObject

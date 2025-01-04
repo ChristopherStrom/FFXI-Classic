@@ -5,6 +5,7 @@
 -- !pos 580 -9 290 112
 -----------------------------------
 local ID = zones[xi.zone.XARCABARD]
+mixins = { require('scripts/mixins/draw_in') }
 -----------------------------------
 ---@type TMobEntity
 local entity = {}
@@ -36,7 +37,7 @@ local function rotateMob(mob)
             rotationChange = -1 * rotationChange
         end
 
-        if math.random() < .25 then
+        if math.random(1, 100) <= 25 then
             rotationChange = 0
             mob:setLocalVar('rotationDirection', (rotationDirection + 1) % 2)
         end
@@ -49,7 +50,7 @@ local function rotateMob(mob)
 end
 
 entity.onPathPoint = function(mob)
-    if math.random() < 0.5 then
+    if math.random(1, 100) <= 50 then
         mob:setSpeed(0)
         mob:timer(math.random(4000, 8000), function(mobArg)
             mobArg:setSpeed(baseSpeed)
@@ -69,7 +70,7 @@ entity.onMobRoam = function(mob)
         mob:getSpeed() ~= 0
     then
         local pathFlag = xi.pathflag.SLIDE
-        if math.random() < .5 then
+        if math.random(1, 100) <= 50 then
             -- sometimes he runs between points
             mob:setSpeed(baseSpeed * 1.5)
             pathFlag = pathFlag + xi.pathflag.RUN

@@ -352,8 +352,9 @@ namespace petutils
                 break;
         }
 
-        PMob->speed    = petStats->speed;
-        PMob->speedsub = petStats->speed;
+        PMob->baseSpeed      = petStats->speed;
+        PMob->speed          = petStats->speed;
+        PMob->animationSpeed = petStats->speed;
 
         PMob->UpdateHealth();
         PMob->health.tp = 0;
@@ -1075,20 +1076,28 @@ namespace petutils
             battleutils::AddTraits(PPet, traits::GetTraits(PPet->GetSJob()), PPet->GetSLevel());
         }
 
-        charutils::BuildingCharAbilityTable(static_cast<CCharEntity*>(PMaster));
-        charutils::BuildingCharPetAbilityTable(static_cast<CCharEntity*>(PMaster), PPet, PPet->m_PetID);
-        static_cast<CCharEntity*>(PMaster)->pushPacket(new CCharUpdatePacket(static_cast<CCharEntity*>(PMaster)));
-        static_cast<CCharEntity*>(PMaster)->pushPacket(new CPetSyncPacket(static_cast<CCharEntity*>(PMaster)));
+        if (auto* PMasterChar = dynamic_cast<CCharEntity*>(PMaster))
+        {
+            charutils::BuildingCharAbilityTable(PMasterChar);
+            charutils::BuildingCharPetAbilityTable(PMasterChar, PPet, PPet->m_PetID);
 
-        // check latents affected by pets
-        static_cast<CCharEntity*>(PMaster)->PLatentEffectContainer->CheckLatentsPetType();
+            PMasterChar->pushPacket<CCharUpdatePacket>(PMasterChar);
+            PMasterChar->pushPacket<CPetSyncPacket>(PMasterChar);
 
-        // clang-format off
-                PMaster->ForParty([](CBattleEntity* PMember)
+            // check latents affected by pets
+            PMasterChar->PLatentEffectContainer->CheckLatentsPetType();
+
+            // clang-format off
+            PMasterChar->ForParty([](CBattleEntity* PMember)
+            {
+                if (const auto* PMemberChar = dynamic_cast<CCharEntity*>(PMember))
                 {
-                    static_cast<CCharEntity*>(PMember)->PLatentEffectContainer->CheckLatentsPartyAvatar();
-                });
-        // clang-format on
+                    PMemberChar->PLatentEffectContainer->CheckLatentsPartyAvatar();
+                }
+            });
+            // clang-format on
+        }
+
         if (PMaster->StatusEffectContainer->HasStatusEffect(EFFECT_DEBILITATION))
         {
             PPet->StatusEffectContainer->AddStatusEffect(new CStatusEffect(EFFECT_DEBILITATION, EFFECT_DEBILITATION, PMaster->StatusEffectContainer->GetStatusEffect(EFFECT_DEBILITATION)->GetPower(), 0, PMaster->StatusEffectContainer->GetStatusEffect(EFFECT_DEBILITATION)->GetDuration()), true);
@@ -1351,9 +1360,9 @@ namespace petutils
 
         charutils::BuildingCharAbilityTable(PChar);
         PChar->PPet = nullptr;
-        PChar->pushPacket(new CCharUpdatePacket(PChar));
-        PChar->pushPacket(new CCharAbilitiesPacket(PChar));
-        PChar->pushPacket(new CPetSyncPacket(PChar));
+        PChar->pushPacket<CCharUpdatePacket>(PChar);
+        PChar->pushPacket<CCharAbilitiesPacket>(PChar);
+        PChar->pushPacket<CPetSyncPacket>(PChar);
     }
 
     void DespawnPet(CBattleEntity* PMaster)
@@ -1791,7 +1800,7 @@ namespace petutils
         {
             uint8 spawnLevel = static_cast<CCharEntity*>(PMaster)->petZoningInfo.petLevel;
             PPet->setSpawnLevel(spawnLevel > 0 ? spawnLevel : UINT8_MAX);
-            PPet->setJugDuration(static_cast<int32>(PPetData->time));
+            PPet->setJugDuration(PPetData->time);
             CalculateJugPetStats(PMaster, PPet);
         }
         else if (PPet->getPetType() == PET_TYPE::WYVERN)
