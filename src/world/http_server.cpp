@@ -223,6 +223,7 @@ void HTTPServer::LockingUpdate()
 
         // Chars per zone
         {
+            apiDataCache.zonePlayerCounts.clear();
             auto rset = db::preparedStmt("SELECT chars.pos_zone, COUNT(*) AS `count` "
                                 "FROM chars "
                                 "INNER JOIN accounts_sessions "
