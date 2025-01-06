@@ -174,10 +174,10 @@ xi.player.onGameIn = function(player, firstLogin, zoning)
  
     -- Give player linkpearl if doesnt have
     if 
-	player:getLocalVar('PhynixLinkperal') == 0 
+	player:getCharVar('PhynixLinkperal') == 0 
     then 
 	player:addLinkpearl('Phynix', false)
-	player:setLocalVar('PhynixLinkperal', 1)
+	player:setCharVar('PhynixLinkperal', 1)
     end   
 
     -- Abyssea starting quest should be flagged when expansion is active
